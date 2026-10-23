@@ -1,0 +1,2033 @@
+# from __future__ import annotations
+
+# import json
+# import re
+# import uuid
+# from datetime import datetime
+# from difflib import SequenceMatcher
+# from pathlib import Path
+# from typing import Any
+
+# import pandas as pd
+# import streamlit as st
+
+
+# APP_DIR = Path(__file__).resolve().parent
+# DATA_FILE = APP_DIR / "rahat_grid_data.json"
+# RESOURCE_LABELS = {
+#     "water": "Water (litres)",
+#     "food": "Food (meal packs)",
+#     "first_aid": "First-aid kits",
+# }
+# STATUSES = ["New", "Under review", "Resolved"]
+# CRITICAL_TERMS = (
+#     "trapped",
+#     "on the roof",
+#     "rising fast",
+#     "swept away",
+#     "injured",
+#     "urgent medical",
+#     "life-threatening",
+# )
+# REVIEW_ACTIONS = {
+#     "Critical": "Confirm the exact location and immediate danger, then escalate for human review.",
+#     "High": "Verify the affected count and first-aid request; review suitable supplies.",
+#     "Medium": "Confirm the number affected and requested supplies against current stock.",
+#     "Low": "Check the report details and retain it for routine human review.",
+# }
+
+
+# def demo_data() -> dict[str, Any]:
+#     return {
+#         "inventory": {"water": 180, "food": 90, "first_aid": 12},
+#         "reports": [
+#             {
+#                 "id": "RG-1042",
+#                 "created_at": "2026-10-23 08:10",
+#                 "reporter": "Demo caller A",
+#                 "zone": "North Canal",
+#                 "description": "Two adults and one child trapped on the roof as water rises fast.",
+#                 "people": 3,
+#                 "needs": {"water": 12, "food": 3, "first_aid": 1},
+#                 "status": "New",
+#             },
+#             {
+#                 "id": "RG-1043",
+#                 "created_at": "2026-10-23 08:24",
+#                 "reporter": "Demo caller B",
+#                 "zone": "North Canal",
+#                 "description": "Family of three on a roof, flood water is rising fast near the canal.",
+#                 "people": 3,
+#                 "needs": {"water": 12, "food": 3, "first_aid": 0},
+#                 "status": "New",
+#             },
+#             {
+#                 "id": "RG-1044",
+#                 "created_at": "2026-10-23 09:02",
+#                 "reporter": "Demo caller C",
+#                 "zone": "Market Road",
+#                 "description": "Flood water entered a ground-floor clinic. Several people need first aid.",
+#                 "people": 11,
+#                 "needs": {"water": 30, "food": 12, "first_aid": 4},
+#                 "status": "Under review",
+#             },
+#             {
+#                 "id": "RG-1045",
+#                 "created_at": "2026-10-23 09:35",
+#                 "reporter": "Demo caller D",
+#                 "zone": "East School",
+#                 "description": "Residents at the school shelter need drinking water and meal packs.",
+#                 "people": 8,
+#                 "needs": {"water": 24, "food": 16, "first_aid": 0},
+#                 "status": "New",
+#             },
+#             {
+#                 "id": "RG-1046",
+#                 "created_at": "2026-10-23 10:05",
+#                 "reporter": "Demo caller E",
+#                 "zone": "South Bridge",
+#                 "description": "Flood water is blocking the road; no injuries reported. Requesting food.",
+#                 "people": 2,
+#                 "needs": {"water": 0, "food": 5, "first_aid": 0},
+#                 "status": "New",
+#             },
+#         ],
+#     }
+
+
+# def validate_data(data: Any) -> dict[str, Any]:
+#     if not isinstance(data, dict) or not isinstance(data.get("reports"), list):
+#         raise ValueError("Saved data must contain a reports list.")
+#     inventory = data.get("inventory")
+#     if not isinstance(inventory, dict):
+#         raise ValueError("Saved data must contain an inventory object.")
+#     cleaned_inventory: dict[str, int] = {}
+#     for item in RESOURCE_LABELS:
+#         value = inventory.get(item)
+#         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+#             raise ValueError(f"Inventory value for {item} must be a non-negative integer.")
+#         cleaned_inventory[item] = value
+
+#     required_fields = {"id", "created_at", "reporter", "zone", "description", "people", "needs", "status"}
+#     cleaned_reports: list[dict[str, Any]] = []
+#     ids: set[str] = set()
+#     for report in data["reports"]:
+#         if not isinstance(report, dict) or not required_fields.issubset(report):
+#             raise ValueError("A saved report is missing required fields.")
+#         if not all(isinstance(report[key], str) for key in ("id", "created_at", "reporter", "zone", "description")):
+#             raise ValueError("Saved report text fields must be strings.")
+#         if report["id"] in ids:
+#             raise ValueError(f"Duplicate report ID in saved data: {report['id']}")
+#         ids.add(report["id"])
+#         if isinstance(report["people"], bool) or not isinstance(report["people"], int) or report["people"] < 1:
+#             raise ValueError(f"People count for {report['id']} must be a positive integer.")
+#         if report["status"] not in STATUSES:
+#             raise ValueError(f"Invalid status in saved report {report['id']}.")
+#         if not isinstance(report["needs"], dict):
+#             raise ValueError(f"Needs for {report['id']} must be an object.")
+#         needs: dict[str, int] = {}
+#         for item in RESOURCE_LABELS:
+#             value = report["needs"].get(item, 0)
+#             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+#                 raise ValueError(f"Need for {item} in {report['id']} must be a non-negative integer.")
+#             needs[item] = value
+#         cleaned_reports.append({**report, "needs": needs})
+#     return {"inventory": cleaned_inventory, "reports": cleaned_reports}
+
+
+# def save_data(data: dict[str, Any]) -> None:
+#     checked = validate_data(data)
+#     temporary_file = DATA_FILE.with_suffix(".json.tmp")
+#     temporary_file.write_text(json.dumps(checked, indent=2), encoding="utf-8")
+#     temporary_file.replace(DATA_FILE)
+
+
+# def load_data() -> dict[str, Any]:
+#     if not DATA_FILE.exists():
+#         data = demo_data()
+#         save_data(data)
+#         return data
+#     try:
+#         return validate_data(json.loads(DATA_FILE.read_text(encoding="utf-8")))
+#     except (json.JSONDecodeError, OSError, ValueError) as error:
+#         raise RuntimeError(f"Could not load local report data ({DATA_FILE.name}): {error}") from error
+
+
+# def urgency_for(report: dict[str, Any]) -> tuple[str, list[str]]:
+#     text = report["description"].casefold()
+#     matched_terms = [term for term in CRITICAL_TERMS if term in text]
+#     if matched_terms:
+#         reasons = [f"Immediate-danger wording matched: “{', '.join(matched_terms)}”."]
+#         return "Critical", reasons
+#     if report["needs"]["first_aid"] > 0:
+#         reasons = ["First-aid kits requested; human review is recommended."]
+#         if report["people"] >= 10:
+#             reasons.append(f"{report['people']} people reported (10 or more raises priority).")
+#         return "High", reasons
+#     if report["people"] >= 10:
+#         return "High", [f"{report['people']} people reported (10 or more raises priority)."]
+#     if report["people"] >= 4:
+#         return "Medium", [f"{report['people']} people reported (4–9 raises priority)."]
+#     if any(report["needs"].values()):
+#         return "Medium", ["A resource request was recorded; check stock and confirm the need."]
+#     return "Low", ["No immediate-danger phrase or resource request matched the local rules."]
+
+
+# def normalize_text(text: str) -> str:
+#     return re.sub(r"[^a-z0-9\s]", " ", text.casefold()).strip()
+
+
+# def duplicate_candidates(report: dict[str, Any], reports: list[dict[str, Any]]) -> list[tuple[str, int]]:
+#     candidates = []
+#     current = normalize_text(report["description"])
+#     for other in reports:
+#         if other["id"] == report["id"] or other["zone"].casefold() != report["zone"].casefold():
+#             continue
+#         score = SequenceMatcher(None, current, normalize_text(other["description"])).ratio()
+#         if score >= 0.45:
+#             candidates.append((other["id"], round(score * 100)))
+#     return sorted(candidates, key=lambda candidate: candidate[1], reverse=True)
+
+
+# def make_report(
+#     reporter: str,
+#     zone: str,
+#     description: str,
+#     people: int,
+#     needs: dict[str, int],
+# ) -> dict[str, Any]:
+#     return {
+#         "id": f"RG-{uuid.uuid4().hex[:6].upper()}",
+#         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+#         "reporter": reporter.strip(),
+#         "zone": zone.strip(),
+#         "description": description.strip(),
+#         "people": people,
+#         "needs": needs,
+#         "status": "New",
+#     }
+
+
+# st.set_page_config(page_title="RAHAT GRID AI | Response Desk", page_icon="🛟", layout="wide")
+# st.markdown(
+#     """
+#     <style>
+#     :root { --navy: #102b46; --blue: #245b83; --pale: #f2f6fa; --line: #dbe4ec; }
+#     .stApp { background: #f5f8fb; color: #18324b; }
+#     [data-testid="stHeader"] { background: rgba(245,248,251,.92); }
+#     [data-testid="stSidebar"] { background: #102b46; }
+#     [data-testid="stSidebar"] * { color: #f3f7fb; }
+#     .hero { background: linear-gradient(115deg,#102b46,#1d496b); color: white;
+#         padding: 1.5rem 1.8rem; border-radius: 14px; margin-bottom: 1rem; }
+#     .hero h1 { color: white; margin: 0; letter-spacing: .02em; }
+#     .hero p { color: #d5e4ef; margin: .45rem 0 0; }
+#     .section-card { background: white; border: 1px solid var(--line); border-radius: 12px;
+#         padding: 1rem 1.2rem; margin: .45rem 0; }
+#     div[data-testid="stMetric"] { background: white; border: 1px solid var(--line);
+#         padding: .75rem 1rem; border-radius: 10px; }
+#     .small-note { color: #526b80; font-size: .9rem; }
+#     </style>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+# st.markdown(
+#     """
+#     <div class="hero">
+#       <h1>RAHAT GRID AI</h1>
+#       <p>Disaster response desk · Explainable local triage · Human decisions stay in control</p>
+#     </div>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+# try:
+#     app_data = load_data()
+# except RuntimeError as error:
+#     st.error(str(error))
+#     st.info("Keep a copy of the file, then use Reset demo data only if you want to replace it.")
+#     st.stop()
+
+# with st.sidebar:
+#     st.markdown("## Response desk")
+#     st.caption("Local prototype · Fictional sample reports")
+#     st.markdown("---")
+#     st.markdown("**Triage rules**")
+#     st.caption("Critical: immediate-danger phrase. High: first-aid request or 10+ people. Medium: 4–9 people or another resource request. Low: otherwise.")
+#     st.markdown("**Duplicate check**")
+#     st.caption("Same zone and at least 45% local text similarity. This only flags candidates; it never merges reports.")
+#     st.markdown("---")
+#     if st.button("Reset demo data", width="stretch", type="secondary"):
+#         for report in app_data["reports"]:
+#             st.session_state.pop(f"status_{report['id']}", None)
+#         for key in ("inventory_water", "inventory_food", "inventory_first_aid"):
+#             st.session_state.pop(key, None)
+#         save_data(demo_data())
+#         st.rerun()
+#     st.caption(f"Saved locally in `{DATA_FILE.name}`. No cloud sync or external API.")
+
+# reports = app_data["reports"]
+# counts_by_status = {status: sum(report["status"] == status for report in reports) for status in STATUSES}
+# critical_count = sum(urgency_for(report)[0] == "Critical" for report in reports)
+
+# metric_columns = st.columns(4)
+# metric_columns[0].metric("Open reports", counts_by_status["New"] + counts_by_status["Under review"])
+# metric_columns[1].metric("Critical flags", critical_count)
+# metric_columns[2].metric("Under review", counts_by_status["Under review"])
+# metric_columns[3].metric("Fictional reports", len(reports))
+
+# tab_reports, tab_add, tab_resources = st.tabs(["Triage queue", "Add a report", "Resources & method"])
+
+# with tab_reports:
+#     st.subheader("Triage queue")
+#     st.markdown(
+#         '<p class="small-note">Priority is a transparent rule-based suggestion, not a verified assessment. '
+#         "Review each report and confirm details before taking action.</p>",
+#         unsafe_allow_html=True,
+#     )
+#     status_filter = st.multiselect("Filter by status", STATUSES, default=STATUSES, key="status_filter")
+#     priority_filter = st.multiselect(
+#         "Filter by suggested priority",
+#         ["Critical", "High", "Medium", "Low"],
+#         default=["Critical", "High", "Medium", "Low"],
+#         key="priority_filter",
+#     )
+#     filtered_reports = [
+#         report
+#         for report in reports
+#         if report["status"] in status_filter and urgency_for(report)[0] in priority_filter
+#     ]
+#     if not filtered_reports:
+#         st.info("No reports match these filters.")
+#     for report in filtered_reports:
+#         urgency, reasons = urgency_for(report)
+#         duplicates = duplicate_candidates(report, reports)
+#         with st.container(border=True):
+#             heading, badge = st.columns([5, 1])
+#             heading.markdown(f"### {report['id']} · {report['zone']}")
+#             badge.markdown(f"**{urgency.upper()}**")
+#             st.caption(f"{report['created_at']} · Reported by {report['reporter']} · {report['people']} people · Status: {report['status']}")
+#             st.write(report["description"])
+#             st.markdown("**Why this priority?**")
+#             for reason in reasons:
+#                 st.markdown(f"- {reason}")
+#             st.info(f"Responder review: {REVIEW_ACTIONS[urgency]}")
+#             if duplicates:
+#                 candidate_text = ", ".join(f"{candidate} ({score}% text similarity)" for candidate, score in duplicates)
+#                 st.warning(f"Possible same-zone duplicate(s): {candidate_text}. Compare reports; nothing was merged.")
+#             else:
+#                 st.caption("No same-zone text match crossed the 45% candidate threshold.")
+
+#             match_rows = []
+#             for item, label in RESOURCE_LABELS.items():
+#                 requested = report["needs"][item]
+#                 available = app_data["inventory"][item]
+#                 match_rows.append(
+#                     {
+#                         "Resource": label,
+#                         "Requested": requested,
+#                         "Available in inventory": available,
+#                         "Potential match": min(requested, available),
+#                         "Unmet": max(requested - available, 0),
+#                     }
+#                 )
+#             st.markdown("**Request and inventory check**")
+#             st.dataframe(pd.DataFrame(match_rows), hide_index=True, width="stretch")
+#             st.caption("Potential matches are suggestions against current stock only. They do not reserve stock or dispatch resources.")
+#             status_key = f"status_{report['id']}"
+#             new_status = st.selectbox(
+#                 "Human review status",
+#                 STATUSES,
+#                 index=STATUSES.index(report["status"]),
+#                 key=status_key,
+#             )
+#             if st.button("Save status", key=f"save_{report['id']}"):
+#                 report["status"] = new_status
+#                 save_data(app_data)
+#                 st.success(f"{report['id']} status saved as {new_status}.")
+#                 st.rerun()
+
+# with tab_add:
+#     st.subheader("Add a fictional or locally received report")
+#     st.caption("Enter only information appropriate for your local demo. Priority and duplicate checks are advisory.")
+#     with st.form("add_report_form", clear_on_submit=True):
+#         reporter = st.text_input("Reporter label", max_chars=60, placeholder="e.g., Caller 12")
+#         zone = st.text_input("Area / zone", max_chars=80, placeholder="e.g., North Canal")
+#         description = st.text_area("What is happening?", max_chars=1000, height=120)
+#         people = st.number_input("People affected", min_value=1, max_value=100000, value=1, step=1)
+#         st.markdown("**Requested resources**")
+#         need_columns = st.columns(3)
+#         water_need = need_columns[0].number_input("Water (litres)", min_value=0, max_value=100000, value=0, step=1)
+#         food_need = need_columns[1].number_input("Food (meal packs)", min_value=0, max_value=100000, value=0, step=1)
+#         first_aid_need = need_columns[2].number_input("First-aid kits", min_value=0, max_value=100000, value=0, step=1)
+#         submitted = st.form_submit_button("Add report", type="primary", width="stretch")
+#         if submitted:
+#             if not reporter.strip() or not zone.strip() or not description.strip():
+#                 st.error("Reporter label, area, and description are required.")
+#             else:
+#                 new_report = make_report(
+#                     reporter,
+#                     zone,
+#                     description,
+#                     int(people),
+#                     {
+#                         "water": int(water_need),
+#                         "food": int(food_need),
+#                         "first_aid": int(first_aid_need),
+#                     },
+#                 )
+#                 candidates = duplicate_candidates(new_report, reports)
+#                 reports.append(new_report)
+#                 save_data(app_data)
+#                 st.success(f"Report {new_report['id']} saved. It has not been merged with any other report.")
+#                 if candidates:
+#                     matches = ", ".join(f"{candidate} ({score}%)" for candidate, score in candidates)
+#                     st.warning(f"Please compare these possible same-zone matches: {matches}.")
+#                 st.rerun()
+
+# with tab_resources:
+#     st.subheader("Inventory and transparent method")
+#     st.markdown("Inventory is a manually maintained local count. Requests are compared with stock item by item.")
+#     with st.form("inventory_form"):
+#         inventory_columns = st.columns(3)
+#         updated_inventory = {
+#             "water": inventory_columns[0].number_input(
+#                 "Water (litres)", min_value=0, max_value=1000000,
+#                 value=app_data["inventory"]["water"], step=10, key="inventory_water",
+#             ),
+#             "food": inventory_columns[1].number_input(
+#                 "Food (meal packs)", min_value=0, max_value=1000000,
+#                 value=app_data["inventory"]["food"], step=10, key="inventory_food",
+#             ),
+#             "first_aid": inventory_columns[2].number_input(
+#                 "First-aid kits", min_value=0, max_value=1000000,
+#                 value=app_data["inventory"]["first_aid"], step=1, key="inventory_first_aid",
+#             ),
+#         }
+#         inventory_submitted = st.form_submit_button("Save inventory")
+#         if inventory_submitted:
+#             app_data["inventory"] = {item: int(value) for item, value in updated_inventory.items()}
+#             save_data(app_data)
+#             st.success("Inventory saved to the local data file.")
+#             st.rerun()
+
+#     st.markdown("#### Current local inventory")
+#     inventory_rows = [
+#         {"Resource": label, "Available": app_data["inventory"][item]}
+#         for item, label in RESOURCE_LABELS.items()
+#     ]
+#     st.dataframe(pd.DataFrame(inventory_rows), hide_index=True, width="stretch")
+#     st.markdown("#### What the prototype does")
+#     st.markdown(
+#         """
+#         - Assigns suggested urgency using the visible local rules described in the sidebar.
+#         - Compares report descriptions only within the same zone; a similarity score is a prompt to review, not proof of duplication.
+#         - Shows a per-report potential resource match based on the current inventory count.
+#         - Saves reports, statuses, and stock to `rahat_grid_data.json` beside this app.
+#         - Does not use an AI service, live data, automatic report merging, or automatic dispatch.
+#         """
+#     )
+#     st.info("All starter reports and stock counts are fictional demonstration data. Verify reports and inventory with trusted responders before acting.")
+
+
+
+
+
+import json
+import os
+import re
+import sqlite3
+import uuid
+from datetime import datetime
+from difflib import SequenceMatcher
+
+import pandas as pd
+import streamlit as st
+
+# ---------------------------------------------------------------------------
+# Config & constants
+# ---------------------------------------------------------------------------
+DB_PATH = "rahat_grid_ai.db"
+
+HAZARDS = ["Flood", "Medical", "Food", "Water", "Other"]
+STATUSES = [
+    "Under Review",
+    "Awaiting Verification",
+    "Assigned for Follow-up",
+    "Resolved / Closed",
+]
+PRIORITIES = ["Urgent Review", "High", "Moderate", "Routine Review"]
+VERIFY_STATUSES = ["Unverified", "Verified by reviewer", "Cannot verify"]
+PRIORITY_COLORS = {
+    "Urgent Review": "#dc2626",
+    "High": "#ea580c",
+    "Moderate": "#d97706",
+    "Routine Review": "#16a34a",
+}
+
+st.set_page_config(
+    page_title="RAHAT GRID AI",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ---------------------------------------------------------------------------
+# CSS
+# ---------------------------------------------------------------------------
+def inject_css():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --navy: #0b1e35;
+            --navy-light: #13294a;
+            --accent: #2563eb;
+            --bg: #f4f6f9;
+            --border: #e2e8f0;
+        }
+        .stApp { background: var(--bg); }
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0b1e35 0%, #0e2444 100%);
+            border-right: 1px solid #1a2f52;
+        }
+        section[data-testid="stSidebar"] * { color: #e6eef7; }
+        section[data-testid="stSidebar"] .stRadio > label { color: #cbd5e1 !important; font-weight: 600; }
+        section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
+            color: #cbd5e1 !important;
+            padding: 6px 10px;
+            border-radius: 8px;
+            transition: background 0.15s;
+        }
+        section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {
+            background: rgba(37, 99, 235, 0.18);
+        }
+        section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label[data-checked="true"] {
+            background: rgba(37, 99, 235, 0.28);
+        }
+        section[data-testid="stSidebar"] hr { border-color: #1a2f52; }
+
+        .rahat-header {
+            background: linear-gradient(135deg, #0b1e35 0%, #1e3a5f 100%);
+            padding: 22px 28px;
+            border-radius: 12px;
+            margin-bottom: 18px;
+            border: 1px solid #1a2f52;
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.18);
+        }
+        .rahat-header h1 {
+            color: #ffffff;
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            margin: 0;
+        }
+        .rahat-header .sub {
+            color: #93b4d6;
+            font-size: 13px;
+            margin-top: 4px;
+            letter-spacing: 0.3px;
+        }
+        .sim-banner {
+            display: inline-block;
+            background: rgba(220, 38, 38, 0.20);
+            color: #fecaca;
+            border: 1px solid rgba(248, 113, 113, 0.45);
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            margin-top: 12px;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: transparent;
+            color: #64748b;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 8px 8px 0 0;
+        }
+        .stTabs [aria-selected="true"] {
+            color: var(--accent) !important;
+            background: white !important;
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: 600;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        #MainMenu { visibility: hidden; }
+        footer { visibility: hidden; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def new_report_code() -> str:
+    return "INC-" + datetime.now().strftime("%y%m%d") + "-" + uuid.uuid4().hex[:5].upper()
+
+
+def priority_badge(p: str) -> str:
+    color = PRIORITY_COLORS.get(p, "#64748b")
+    return (
+        f'<span class="badge" style="background:{color}1a; color:{color}; '
+        f'border:1px solid {color}55;">{p}</span>'
+    )
+
+
+def current_priority(incident_row) -> str:
+    return incident_row["human_priority"] or incident_row["suggested_priority"]
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS incidents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_code TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            location TEXT,
+            hazard_type TEXT,
+            affected_count INTEGER DEFAULT 0,
+            danger_trapped INTEGER DEFAULT 0,
+            danger_rising_water INTEGER DEFAULT 0,
+            danger_injury INTEGER DEFAULT 0,
+            danger_other INTEGER DEFAULT 0,
+            reporter TEXT,
+            created_at TEXT NOT NULL,
+            status TEXT DEFAULT 'Under Review',
+            suggested_priority TEXT,
+            priority_reasons TEXT,
+            verify_flags TEXT,
+            recommended_action TEXT,
+            human_decision TEXT DEFAULT 'Pending',
+            human_priority TEXT,
+            reviewer_notes TEXT,
+            verified_status TEXT DEFAULT 'Unverified'
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS inventory (
+            item_id TEXT PRIMARY KEY,
+            item_name TEXT NOT NULL,
+            category TEXT,
+            quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+            unit TEXT,
+            location TEXT,
+            last_updated TEXT,
+            notes TEXT
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS relief_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incident_code TEXT,
+            item_id TEXT,
+            quantity_requested INTEGER NOT NULL CHECK(quantity_requested >= 0),
+            notes TEXT,
+            status TEXT DEFAULT 'Pending Review',
+            matched_qty INTEGER DEFAULT 0,
+            shortfall INTEGER DEFAULT 0,
+            storage_location TEXT,
+            explanation TEXT,
+            created_at TEXT,
+            reviewed_at TEXT
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS duplicate_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_a TEXT NOT NULL,
+            report_b TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reviewed_at TEXT,
+            UNIQUE(report_a, report_b)
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            entity_type TEXT,
+            entity_id TEXT,
+            action TEXT,
+            details TEXT
+        )"""
+    )
+    conn.commit()
+    seed_demo_data(conn)
+    conn.close()
+
+
+def seed_demo_data(conn: sqlite3.Connection) -> None:
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM incidents")
+    if c.fetchone()[0] > 0:
+        return
+
+    demo = [
+        dict(
+            title="Floodwater reportedly rising in Maple Lane residential area",
+            description=(
+                "Residents report water level rising quickly along Maple Lane. "
+                "Some households are unsure whether to evacuate. Fictional scenario."
+            ),
+            location="Sector 4 – Maple Lane (fictional ward)",
+            hazard_type="Flood",
+            affected_count=18,
+            danger_trapped=0,
+            danger_rising_water=1,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Resident A",
+        ),
+        dict(
+            title="People reportedly trapped on roof – Maple Lane",
+            description=(
+                "Report of three people stranded on a rooftop after floodwater rose quickly. "
+                "Cannot confirm from field. Fictional scenario."
+            ),
+            location="Maple Lane, Sector 4 (fictional ward)",
+            hazard_type="Flood",
+            affected_count=3,
+            danger_trapped=1,
+            danger_rising_water=1,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Neighbor B",
+        ),
+        dict(
+            title="First-aid needed after reported injury",
+            description=(
+                "A volunteer reports a minor cut that may need first-aid kits at a "
+                "temporary shelter. Fictional scenario."
+            ),
+            location="Shelter 3, Sector 2 (fictional)",
+            hazard_type="Medical",
+            affected_count=1,
+            danger_trapped=0,
+            danger_rising_water=0,
+            danger_injury=1,
+            danger_other=0,
+            reporter="Demo Volunteer C",
+        ),
+        dict(
+            title="Drinking water shortage at temporary shelter",
+            description=(
+                "Shelter coordinator reports drinking water will run out within hours. "
+                "No immediate danger reported. Fictional scenario."
+            ),
+            location="Shelter 7, Sector 2 (fictional)",
+            hazard_type="Water",
+            affected_count=60,
+            danger_trapped=0,
+            danger_rising_water=0,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Coordinator D",
+        ),
+        dict(
+            title="Food packs requested for flooded neighbourhood",
+            description=(
+                "Community members request food packs for families in a flooded "
+                "neighbourhood. No immediate danger reported. Fictional scenario."
+            ),
+            location="Sector 9 – Riverside (fictional)",
+            hazard_type="Food",
+            affected_count=45,
+            danger_trapped=0,
+            danger_rising_water=0,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Community E",
+        ),
+        dict(
+            title="Rapidly rising water in Riverside Lane",
+            description=(
+                "Water reportedly rising fast in Riverside Lane. Residents requesting "
+                "guidance. Fictional scenario."
+            ),
+            location="Sector 9 – Riverside Lane (fictional)",
+            hazard_type="Flood",
+            affected_count=20,
+            danger_trapped=0,
+            danger_rising_water=1,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Resident F",
+        ),
+        dict(
+            title="Floodwater rising near Riverside Lane homes",
+            description=(
+                "Several homes near Riverside Lane report floodwater rising quickly. "
+                "Fictional scenario."
+            ),
+            location="Riverside Lane, Sector 9 (fictional)",
+            hazard_type="Flood",
+            affected_count=15,
+            danger_trapped=0,
+            danger_rising_water=1,
+            danger_injury=0,
+            danger_other=0,
+            reporter="Demo Resident G",
+        ),
+    ]
+
+    ts = now_iso()
+    for d in demo:
+        code = new_report_code()
+        tr = evaluate_triage(d)
+        c.execute(
+            """INSERT INTO incidents (
+                report_code, title, description, location, hazard_type, affected_count,
+                danger_trapped, danger_rising_water, danger_injury, danger_other,
+                reporter, created_at, status, suggested_priority, priority_reasons,
+                verify_flags, recommended_action, human_decision, human_priority,
+                reviewer_notes, verified_status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                code, d["title"], d["description"], d["location"], d["hazard_type"],
+                d["affected_count"], d["danger_trapped"], d["danger_rising_water"],
+                d["danger_injury"], d["danger_other"], d["reporter"], ts,
+                "Under Review", tr["priority"], json.dumps(tr["reasons"]),
+                json.dumps(tr["flags"]), tr["action"], "Pending", tr["priority"],
+                "", "Unverified",
+            ),
+        )
+
+    inventory_seed = [
+        ("WTR-001", "Drinking water", "Water", 500, "litres",
+         "Depot A – North Fictional Yard", ts, "Bottled and bulk supply"),
+        ("FOOD-001", "Food packs", "Food", 120, "packs",
+         "Depot A – North Fictional Yard", ts, "Family-sized, ready to eat"),
+        ("MED-001", "First-aid kits", "Medical", 40, "kits",
+         "Depot B – Central Fictional Yard", ts, "Basic dressings"),
+        ("BLK-001", "Blankets", "Shelter", 200, "units",
+         "Depot B – Central Fictional Yard", ts, "Thermal"),
+        ("HYG-001", "Basic hygiene kits", "Hygiene", 80, "kits",
+         "Depot C – South Fictional Yard", ts, "Family hygiene"),
+    ]
+    for row in inventory_seed:
+        c.execute("INSERT OR IGNORE INTO inventory VALUES (?,?,?,?,?,?,?,?)", row)
+
+    c.execute(
+        "INSERT INTO activity_log (timestamp, entity_type, entity_id, action, details) "
+        "VALUES (?,?,?,?,?)",
+        (ts, "system", "seed", "Demo data seeded",
+         "Fictional demonstration dataset loaded."),
+    )
+    conn.commit()
+
+
+def log_activity(entity_type: str, entity_id: str, action: str, details: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO activity_log (timestamp, entity_type, entity_id, action, details) "
+        "VALUES (?,?,?,?,?)",
+        (now_iso(), entity_type, entity_id, action, details),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Triage engine (deterministic, rule-based)
+# ---------------------------------------------------------------------------
+def evaluate_triage(d: dict) -> dict:
+    """
+    Deterministic scoring. Keys read from `d`:
+        danger_trapped, danger_rising_water, danger_injury, danger_other (0/1)
+        location, description, affected_count, hazard_type
+    """
+    score = 0
+    reasons = []
+    flags = []
+
+    if d.get("danger_trapped"):
+        score += 50
+        reasons.append("Reported people trapped in a dangerous situation.")
+    if d.get("danger_rising_water"):
+        score += 25
+        reasons.append("Reported rapidly rising floodwater.")
+    if d.get("danger_injury"):
+        score += 30
+        reasons.append("Reported serious injury or immediate medical danger.")
+    if d.get("danger_other"):
+        score += 15
+        reasons.append("Other urgent circumstance reported.")
+
+    danger_count = sum(
+        1 for k in ("danger_trapped", "danger_rising_water", "danger_injury", "danger_other")
+        if d.get(k)
+    )
+    if danger_count >= 2:
+        score += 10
+        reasons.append(f"Multiple danger indicators reported ({danger_count}).")
+
+    loc = (d.get("location") or "").strip()
+    desc = (d.get("description") or "").lower()
+    vague_words = ("somewhere", "unknown", "not sure", "maybe", "possibly", "near")
+
+    if not loc or len(loc) < 6:
+        flags.append("Location text is missing or very brief — verify before routing.")
+    if loc and any(w in loc.lower() for w in vague_words):
+        flags.append("Location contains uncertain language — verify.")
+    if desc and any(w in desc for w in vague_words):
+        flags.append("Description contains uncertain language — verify.")
+    if int(d.get("affected_count", 0) or 0) == 0:
+        flags.append("Reported number of affected people is 0 or unspecified — verify scale.")
+
+    if not reasons:
+        reasons.append("No immediate-danger indicators reported in the submission.")
+
+    if score >= 60:
+        priority = "Urgent Review"
+    elif score >= 35:
+        priority = "High"
+    elif score >= 15:
+        priority = "Moderate"
+    else:
+        priority = "Routine Review"
+
+    if priority == "Urgent Review":
+        action = (
+            "Human reviewer should verify immediately with the reporter and escalate "
+            "to the on-duty coordinator."
+        )
+    elif priority == "High":
+        action = (
+            "Reviewer should verify details and prepare a follow-up plan within the "
+            "next review cycle."
+        )
+    elif priority == "Moderate":
+        action = "Reviewer should confirm the report and route to the appropriate relief track."
+    else:
+        action = "Log for routine review; confirm details before routing."
+
+    if d.get("hazard_type") in ("Food", "Water") and danger_count == 0:
+        reasons.append(
+            "Basic-needs request without immediate-danger indicators — "
+            "route to logistics review; do not disregard."
+        )
+
+    return {
+        "score": score,
+        "priority": priority,
+        "reasons": reasons,
+        "flags": flags,
+        "action": action,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection
+# ---------------------------------------------------------------------------
+def _combined_text(title, description, location):
+    return " ".join(
+        x for x in [title or "", description or "", location or ""] if x
+    ).lower()
+
+
+def similarity_score(text_a: str, text_b: str) -> float:
+    seq = SequenceMatcher(None, text_a, text_b).ratio()
+    ta = set(re.findall(r"\w+", text_a))
+    tb = set(re.findall(r"\w+", text_b))
+    overlap = (len(ta & tb) / len(ta | tb)) if (ta and tb) else 0.0
+    return 0.5 * seq + 0.5 * overlap
+
+
+def find_duplicate_pairs(threshold: float = 0.6):
+    conn = get_conn()
+    incidents = conn.execute(
+        "SELECT report_code, title, description, location FROM incidents"
+    ).fetchall()
+    reviewed = conn.execute(
+        "SELECT report_a, report_b FROM duplicate_reviews"
+    ).fetchall()
+    conn.close()
+
+    reviewed_set = {tuple(sorted((r["report_a"], r["report_b"]))) for r in reviewed}
+    pairs = []
+    n = len(incidents)
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = incidents[i], incidents[j]
+            key = tuple(sorted((a["report_code"], b["report_code"])))
+            if key in reviewed_set:
+                continue
+            ta = _combined_text(a["title"], a["description"], a["location"])
+            tb = _combined_text(b["title"], b["description"], b["location"])
+            score = similarity_score(ta, tb)
+            if score >= threshold:
+                pairs.append(
+                    {
+                        "a": a["report_code"],
+                        "b": b["report_code"],
+                        "a_title": a["title"],
+                        "b_title": b["title"],
+                        "a_desc": a["description"],
+                        "b_desc": b["description"],
+                        "location": a["location"] or b["location"],
+                        "score": round(score, 3),
+                    }
+                )
+    pairs.sort(key=lambda x: -x["score"])
+    return pairs
+
+
+def record_duplicate_review(a: str, b: str, decision: str) -> None:
+    a, b = sorted((a, b))
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO duplicate_reviews (report_a, report_b, decision, reviewed_at) "
+        "VALUES (?,?,?,?)",
+        (a, b, decision, now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    log_activity("duplicate_review", f"{a}|{b}", decision,
+                 f"Pair reviewed: {a} ↔ {b} — {decision}.")
+
+
+# ---------------------------------------------------------------------------
+# Resource matching
+# ---------------------------------------------------------------------------
+def compute_match(item_id: str, qty: int):
+    conn = get_conn()
+    item = conn.execute("SELECT * FROM inventory WHERE item_id=?", (item_id,)).fetchone()
+    conn.close()
+    if not item:
+        return None
+    available = int(item["quantity"])
+    matchable = min(available, qty)
+    shortfall = max(0, qty - available)
+    return {
+        "available": available,
+        "matchable": matchable,
+        "shortfall": shortfall,
+        "location": item["location"],
+        "unit": item["unit"],
+        "item_name": item["item_name"],
+    }
+
+
+def fulfill_request(req_id: int):
+    conn = get_conn()
+    req = conn.execute("SELECT * FROM relief_requests WHERE id=?", (req_id,)).fetchone()
+    if not req:
+        conn.close()
+        return False, "Request not found."
+    if req["status"] == "Fulfilled":
+        conn.close()
+        return False, "Request already fulfilled."
+    item = conn.execute(
+        "SELECT * FROM inventory WHERE item_id=?", (req["item_id"],)
+    ).fetchone()
+    if not item:
+        conn.close()
+        return False, "Inventory item not found."
+    deduct = min(int(req["matched_qty"]), int(item["quantity"]))
+    if deduct <= 0:
+        conn.close()
+        return False, "No stock available to deduct."
+    new_qty = int(item["quantity"]) - deduct
+    try:
+        conn.execute(
+            "UPDATE inventory SET quantity=?, last_updated=? WHERE item_id=?",
+            (new_qty, now_iso(), req["item_id"]),
+        )
+        conn.execute(
+            "UPDATE relief_requests SET status='Fulfilled', reviewed_at=? WHERE id=?",
+            (now_iso(), req_id),
+        )
+        conn.execute(
+            "INSERT INTO activity_log (timestamp, entity_type, entity_id, action, details) "
+            "VALUES (?,?,?,?,?)",
+            (
+                now_iso(), "relief_request", str(req_id), "Fulfilled",
+                f"Deducted {deduct} {item['unit']} of {item['item_name']} "
+                f"from inventory {req['item_id']}. Remaining: {new_qty}.",
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True, f"Deducted {deduct} {item['unit']}. Remaining: {new_qty}."
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        conn.close()
+        return False, f"Deduction failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Reusable UI components
+# ---------------------------------------------------------------------------
+def render_header():
+    st.markdown(
+        """
+        <div class="rahat-header">
+            <h1>RAHAT GRID AI</h1>
+            <div class="sub">Explainable Disaster Triage &amp; Resource Coordination</div>
+            <span class="sim-banner">SIMULATION MODE · FICTIONAL DATA · NOT A LIVE EMERGENCY SERVICE</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def metric_card(label: str, value, hint: str = None, color: str = "#2563eb") -> str:
+    hint_html = (
+        f"<div style='font-size:11px; color:#94a3b8; margin-top:4px;'>{hint}</div>"
+        if hint else ""
+    )
+    return (
+        f"<div style='background:white; border-radius:10px; padding:16px 18px; "
+        f"border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(15,23,42,0.06); height:100%;'>"
+        f"<div style='font-size:11px; text-transform:uppercase; letter-spacing:0.8px; "
+        f"color:#64748b; font-weight:600;'>{label}</div>"
+        f"<div style='font-size:28px; font-weight:700; color:{color}; margin-top:6px;'>{value}</div>"
+        f"{hint_html}</div>"
+    )
+
+
+def bar_chart_html(counts: dict, keys: list, colors: dict = None, accent: str = "#2563eb") -> str:
+    total = max(sum(counts.get(k, 0) for k in keys), 1)
+    html = ""
+    for k in keys:
+        n = counts.get(k, 0)
+        pct = n / total * 100
+        color = (colors or {}).get(k, accent)
+        html += (
+            f"<div style='margin-bottom:10px;'>"
+            f"<div style='display:flex; justify-content:space-between; font-size:12px; "
+            f"color:#475569; margin-bottom:4px;'><span>{k}</span><span>{n}</span></div>"
+            f"<div style='background:#e2e8f0; border-radius:6px; height:10px; overflow:hidden;'>"
+            f"<div style='width:{pct:.1f}%; background:{color}; height:100%;'></div>"
+            f"</div></div>"
+        )
+    return html
+
+
+def render_incident_detail(i):
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f"**Description:** {i['description']}")
+        st.markdown(f"**Location:** {i['location'] or '—'}")
+        st.markdown(f"**Hazard type:** {i['hazard_type']}")
+        st.markdown(f"**Reported affected people:** {i['affected_count']}")
+        st.markdown(f"**Reporter (reported):** {i['reporter'] or '—'}")
+        st.markdown(f"**Created:** {i['created_at']}")
+    with col2:
+        st.markdown(f"**Status:** {i['status']}")
+        st.markdown(f"**Verified:** {i['verified_status']}")
+        st.markdown(f"**Human decision:** {i['human_decision']}")
+
+    st.markdown("---")
+    suggested_html = priority_badge(i["suggested_priority"])
+    final_html = (
+        priority_badge(i["human_priority"])
+        if i["human_priority"] and i["human_priority"] != i["suggested_priority"]
+        else ""
+    )
+    st.markdown(
+        "**Suggested priority:** " + suggested_html
+        + (" · **Human final:** " + final_html if final_html else ""),
+        unsafe_allow_html=True,
+    )
+
+    reasons = json.loads(i["priority_reasons"] or "[]")
+    st.markdown("**Why this was flagged:**")
+    for r in reasons:
+        st.markdown(f"- {r}")
+
+    flags = json.loads(i["verify_flags"] or "[]")
+    if flags:
+        st.markdown("**Information to verify:**")
+        for f in flags:
+            st.markdown(f"- {f}")
+
+    st.markdown(f"**Recommended next step:** {i['recommended_action']}")
+    if i["reviewer_notes"]:
+        st.markdown(f"**Reviewer notes:** {i['reviewer_notes']}")
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+def page_overview():
+    st.subheader("Operations Overview")
+    st.caption(
+        "All figures are computed from the local SQLite database. "
+        "Fictional demonstration data only."
+    )
+
+    conn = get_conn()
+    incidents = conn.execute("SELECT * FROM incidents").fetchall()
+    inventory = conn.execute("SELECT * FROM inventory").fetchall()
+    activity = conn.execute(
+        "SELECT * FROM activity_log ORDER BY id DESC LIMIT 8"
+    ).fetchall()
+    conn.close()
+
+    open_inc = [i for i in incidents if i["status"] != "Resolved / Closed"]
+    urgent = [i for i in open_inc if current_priority(i) == "Urgent Review"]
+    pending = [i for i in incidents if i["human_decision"] == "Pending"]
+    dup_pairs = find_duplicate_pairs()
+    total_stock = sum(int(i["quantity"]) for i in inventory)
+    low_stock = [i for i in inventory if int(i["quantity"]) < 20]
+
+    cols = st.columns(5)
+    cards = [
+        ("Open Incidents", len(open_inc), "Excluding closed cases", "#2563eb"),
+        ("Urgent Review", len(urgent), "Current priority = Urgent", "#dc2626"),
+        ("Awaiting Human Review", len(pending), "Human decision pending", "#ea580c"),
+        ("Possible Duplicates", len(dup_pairs), "Unresolved candidate pairs", "#d97706"),
+        ("Total Stock Units", total_stock,
+         f"{len(inventory)} items · {len(low_stock)} low", "#16a34a"),
+    ]
+    for c, (label, value, hint, color) in zip(cols, cards):
+        with c:
+            st.markdown(metric_card(label, value, hint, color), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+
+    colA, colB = st.columns(2)
+    with colA:
+        with st.container(border=True):
+            st.markdown("#### Priority Distribution (open cases)")
+            counts = {}
+            for i in open_inc:
+                p = current_priority(i)
+                counts[p] = counts.get(p, 0) + 1
+            st.markdown(
+                bar_chart_html(counts, PRIORITIES, PRIORITY_COLORS),
+                unsafe_allow_html=True,
+            )
+    with colB:
+        with st.container(border=True):
+            st.markdown("#### Hazard Mix (open cases)")
+            haz = {}
+            for i in open_inc:
+                haz[i["hazard_type"]] = haz.get(i["hazard_type"], 0) + 1
+            st.markdown(bar_chart_html(haz, HAZARDS), unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown("#### Recent Incidents")
+        if incidents:
+            df = pd.DataFrame(
+                [
+                    {
+                        "Report": i["report_code"],
+                        "Title": (i["title"][:64] + "…") if len(i["title"]) > 64 else i["title"],
+                        "Hazard": i["hazard_type"],
+                        "Priority": current_priority(i),
+                        "Status": i["status"],
+                        "Created": i["created_at"],
+                    }
+                    for i in incidents[:10]
+                ]
+            )
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No incidents recorded yet.")
+
+    with st.container(border=True):
+        st.markdown("#### Recent Activity")
+        if activity:
+            for a in activity:
+                st.markdown(
+                    f"<div style='padding:8px 0; border-bottom:1px solid #eef2f7; "
+                    f"font-size:13px;'><span style='color:#64748b;'>{a['timestamp']}</span>"
+                    f" · <b>{a['action']}</b> · "
+                    f"<span style='color:#475569;'>{a['details']}</span></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No activity logged yet.")
+
+
+def page_incident_reports():
+    st.subheader("Incident Reports")
+    tabs = st.tabs(["Submit New Report", "Browse Reports", "Possible Duplicates"])
+    with tabs[0]:
+        submit_form()
+    with tabs[1]:
+        browse_reports()
+    with tabs[2]:
+        duplicates_tab()
+
+
+def submit_form():
+    st.markdown("##### Submit a new incident report")
+    st.caption(
+        "All fields are treated as *reported* information, not verified fact. "
+        "Avoid entering real personal data."
+    )
+    with st.form("submit_report_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("Report title *")
+            location = st.text_input("Fictional ward / sector or location text")
+            hazard = st.selectbox("Hazard type", HAZARDS)
+            affected = st.number_input(
+                "Number of people reported affected",
+                min_value=0, step=1, value=0,
+            )
+        with col2:
+            description = st.text_area("Detailed description *", height=140)
+            reporter = st.text_input("Reporter name or alias (optional)")
+        st.markdown("**Immediate-danger indicators (as reported):**")
+        dc1, dc2, dc3, dc4 = st.columns(4)
+        with dc1:
+            d_trapped = st.checkbox("People reported trapped")
+        with dc2:
+            d_water = st.checkbox("Rapidly rising water")
+        with dc3:
+            d_injury = st.checkbox("Reported injury / medical danger")
+        with dc4:
+            d_other = st.checkbox("Other urgent circumstance")
+
+        submitted = st.form_submit_button("Submit Report")
+
+    if not submitted:
+        return
+
+    title = (title or "").strip()
+    description = (description or "").strip()
+    if not title:
+        st.error("Title is required.")
+        return
+    if not description:
+        st.error("Description is required.")
+        return
+    if affected < 0:
+        st.error("Affected count cannot be negative.")
+        return
+
+    payload = dict(
+        title=title,
+        description=description,
+        location=(location or "").strip(),
+        hazard_type=hazard,
+        affected_count=int(affected),
+        danger_trapped=int(d_trapped),
+        danger_rising_water=int(d_water),
+        danger_injury=int(d_injury),
+        danger_other=int(d_other),
+    )
+    tr = evaluate_triage(payload)
+    code = new_report_code()
+    ts = now_iso()
+
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO incidents (
+            report_code, title, description, location, hazard_type, affected_count,
+            danger_trapped, danger_rising_water, danger_injury, danger_other,
+            reporter, created_at, status, suggested_priority, priority_reasons,
+            verify_flags, recommended_action, human_decision, human_priority,
+            reviewer_notes, verified_status
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            code, title, description, payload["location"], hazard, int(affected),
+            payload["danger_trapped"], payload["danger_rising_water"],
+            payload["danger_injury"], payload["danger_other"],
+            (reporter or "").strip(), ts, "Under Review", tr["priority"],
+            json.dumps(tr["reasons"]), json.dumps(tr["flags"]), tr["action"],
+            "Pending", tr["priority"], "", "Unverified",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    log_activity("incident", code, "Report submitted",
+                 f"New report: {title} | Hazard: {hazard} | Suggested: {tr['priority']}")
+
+    st.success(
+        f"Report submitted successfully. Generated report ID: **{code}** "
+        f"· Suggested priority: **{tr['priority']}** (pending human review)."
+    )
+
+
+def browse_reports():
+    st.markdown("##### Browse and filter reports")
+    conn = get_conn()
+    incidents = conn.execute(
+        "SELECT * FROM incidents ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        f_hazard = st.selectbox("Hazard", ["All"] + HAZARDS)
+    with c2:
+        f_status = st.selectbox("Status", ["All"] + STATUSES)
+    with c3:
+        f_priority = st.selectbox("Current priority", ["All"] + PRIORITIES)
+    with c4:
+        f_search = st.text_input("Search title or location")
+
+    rows = []
+    for i in incidents:
+        if f_hazard != "All" and i["hazard_type"] != f_hazard:
+            continue
+        if f_status != "All" and i["status"] != f_status:
+            continue
+        if f_priority != "All" and current_priority(i) != f_priority:
+            continue
+        if f_search and f_search.lower() not in (
+            (i["title"] + " " + (i["location"] or "")).lower()
+        ):
+            continue
+        rows.append(i)
+
+    st.caption(f"{len(rows)} of {len(incidents)} reports match the current filters.")
+
+    if not rows:
+        st.info("No reports match these filters.")
+        return
+
+    for i in rows:
+        label = (
+            f"{i['report_code']} · {i['title']} — "
+            f"{current_priority(i)} · {i['status']}"
+        )
+        with st.expander(label):
+            render_incident_detail(i)
+            if i["human_decision"] != "Pending":
+                st.markdown("---")
+                st.markdown("**Update case workflow (administrative only):**")
+                with st.form(f"status_form_{i['report_code']}"):
+                    new_status = st.selectbox(
+                        "Status", STATUSES,
+                        index=STATUSES.index(i["status"]),
+                        key=f"st2_{i['report_code']}",
+                    )
+                    note = st.text_input("Note (optional)", key=f"note2_{i['report_code']}")
+                    upd = st.form_submit_button("Update Status")
+                if upd:
+                    conn = get_conn()
+                    conn.execute(
+                        "UPDATE incidents SET status=? WHERE report_code=?",
+                        (new_status, i["report_code"]),
+                    )
+                    conn.commit()
+                    conn.close()
+                    log_activity(
+                        "incident", i["report_code"], "Status updated",
+                        f"New status: {new_status}. Note: {note or 'n/a'}.",
+                    )
+                    st.success("Status updated.")
+
+
+def duplicates_tab():
+    st.markdown("##### Possible duplicate reports")
+    st.caption(
+        "Similar wording alone does not prove two reports describe the same event. "
+        "Reviewers decide. Confirmed pairs are not shown again as fresh alerts."
+    )
+    threshold = st.slider(
+        "Similarity threshold", min_value=0.4, max_value=0.95, value=0.6, step=0.05
+    )
+    st.caption(
+        f"Score = 0.5 × character-sequence similarity + 0.5 × token overlap. "
+        f"Pairs with score ≥ {threshold:.2f} are flagged."
+    )
+
+    pairs = find_duplicate_pairs(threshold=threshold)
+    if not pairs:
+        st.success("No unresolved candidate pairs above the threshold.")
+        return
+
+    for idx, p in enumerate(pairs):
+        with st.container(border=True):
+            st.markdown(
+                f"**Combined score: {p['score']:.2f}** · "
+                f"`{p['a']}` ↔ `{p['b']}`"
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**{p['a']} — {p['a_title']}**")
+                st.write(p["a_desc"])
+            with c2:
+                st.markdown(f"**{p['b']} — {p['b_title']}**")
+                st.write(p["b_desc"])
+            st.markdown(f"**Location:** {p['location'] or '—'}")
+            st.markdown(
+                f"**Reason flagged:** combined similarity {p['score']:.2f} "
+                f"≥ threshold {threshold:.2f}. Reviewer verification required."
+            )
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Mark as Duplicate", key=f"dup_yes_{idx}"):
+                    record_duplicate_review(p["a"], p["b"], "Reviewed — Duplicate")
+                    st.success("Pair marked as reviewed duplicate.")
+            with b2:
+                if st.button("Mark as Separate Reports", key=f"dup_no_{idx}"):
+                    record_duplicate_review(p["a"], p["b"], "Reviewed — Separate Reports")
+                    st.success("Pair marked as separate reports.")
+
+
+def page_triage_review():
+    st.subheader("Triage Review")
+    st.caption(
+        "Deterministic rule-based triage. Final decisions remain with trained "
+        "human responders. Suggestions may be wrong or incomplete."
+    )
+
+    conn = get_conn()
+    pending = conn.execute(
+        "SELECT * FROM incidents WHERE human_decision='Pending' ORDER BY created_at ASC"
+    ).fetchall()
+    conn.close()
+
+    if not pending:
+        st.success("No reports pending human review.")
+        return
+
+    st.markdown(f"**{len(pending)} report(s) awaiting human review.**")
+    for i in pending:
+        current = current_priority(i)
+        with st.expander(f"{i['report_code']} · {i['title']} · {current}"):
+            render_incident_detail(i)
+            st.markdown("---")
+            with st.form(f"review_form_{i['report_code']}"):
+                new_priority = st.selectbox(
+                    "Final priority decision",
+                    PRIORITIES,
+                    index=PRIORITIES.index(current),
+                    key=f"pr_{i['report_code']}",
+                )
+                new_status = st.selectbox(
+                    "Case status",
+                    STATUSES,
+                    index=STATUSES.index(i["status"]),
+                    key=f"st_{i['report_code']}",
+                )
+                v_index = (
+                    VERIFY_STATUSES.index(i["verified_status"])
+                    if i["verified_status"] in VERIFY_STATUSES else 0
+                )
+                new_verified = st.selectbox(
+                    "Field verification",
+                    VERIFY_STATUSES,
+                    index=v_index,
+                    key=f"vf_{i['report_code']}",
+                )
+                notes = st.text_area(
+                    "Reviewer notes (required to record a decision)",
+                    key=f"notes_{i['report_code']}",
+                )
+                submitted = st.form_submit_button("Record Review Decision")
+
+            if submitted:
+                if not (notes or "").strip():
+                    st.error("Reviewer notes are required to record a decision.")
+                else:
+                    decision = (
+                        "Confirmed"
+                        if new_priority == i["suggested_priority"]
+                        else "Changed by reviewer"
+                    )
+                    conn = get_conn()
+                    conn.execute(
+                        """UPDATE incidents
+                           SET human_decision=?, human_priority=?, status=?,
+                               reviewer_notes=?, verified_status=?
+                           WHERE report_code=?""",
+                        (
+                            decision, new_priority, new_status,
+                            notes.strip(), new_verified, i["report_code"],
+                        ),
+                    )
+                    conn.commit()
+                    conn.close()
+                    log_activity(
+                        "incident", i["report_code"], "Human review recorded",
+                        f"Decision: {decision}. Final priority: {new_priority}. "
+                        f"Status: {new_status}. Verification: {new_verified}. "
+                        f"Notes: {notes.strip()}",
+                    )
+                    st.success("Review decision saved.")
+
+
+def page_resource_inventory():
+    st.subheader("Resource Inventory & Matching")
+    st.caption(
+        "Stock figures are local fictional demo quantities. A match is a suggestion; "
+        "stock is deducted only after a reviewer explicitly confirms fulfilment."
+    )
+    tabs = st.tabs(["Inventory", "Relief Requests", "New Request"])
+    with tabs[0]:
+        inventory_tab()
+    with tabs[1]:
+        requests_tab()
+    with tabs[2]:
+        new_request_tab()
+
+
+def inventory_tab():
+    conn = get_conn()
+    items = conn.execute("SELECT * FROM inventory ORDER BY item_id").fetchall()
+    conn.close()
+
+    if items:
+        df = pd.DataFrame([dict(x) for x in items])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No inventory items yet.")
+
+    with st.expander("Adjust stock quantity"):
+        if not items:
+            st.info("Add an item first.")
+        else:
+            ids = [x["item_id"] for x in items]
+            sel = st.selectbox("Select item", ids, key="inv_edit_sel")
+            current = next((x for x in items if x["item_id"] == sel), None)
+            new_qty = st.number_input(
+                "New quantity", min_value=0, value=int(current["quantity"]),
+                step=1, key="inv_edit_qty",
+            )
+            note = st.text_input("Reason / note (optional)", key="inv_edit_note")
+            if st.button("Update Quantity", key="inv_update_btn"):
+                conn = get_conn()
+                try:
+                    merged_notes = (current["notes"] or "")
+                    if note.strip():
+                        merged_notes = (merged_notes + " | " + note.strip()).strip(" |")
+                    conn.execute(
+                        "UPDATE inventory SET quantity=?, last_updated=?, notes=? "
+                        "WHERE item_id=?",
+                        (int(new_qty), now_iso(), merged_notes, sel),
+                    )
+                    conn.execute(
+                        "INSERT INTO activity_log "
+                        "(timestamp, entity_type, entity_id, action, details) "
+                        "VALUES (?,?,?,?,?)",
+                        (
+                            now_iso(), "inventory", sel, "Quantity updated",
+                            f"Changed from {current['quantity']} to {new_qty}. "
+                            f"Note: {note or 'n/a'}.",
+                        ),
+                    )
+                    conn.commit()
+                    st.success("Inventory updated.")
+                except sqlite3.IntegrityError as exc:
+                    st.error(f"Update failed: {exc}")
+                finally:
+                    conn.close()
+
+    with st.expander("Add new inventory item"):
+        with st.form("add_inventory_item"):
+            iid = st.text_input("Item ID (must be unique)")
+            name = st.text_input("Item name")
+            cat = st.selectbox(
+                "Category",
+                ["Water", "Food", "Medical", "Shelter", "Hygiene", "Other"],
+            )
+            qty = st.number_input("Quantity", min_value=0, step=1, value=0)
+            unit = st.text_input("Unit", value="units")
+            loc = st.text_input("Fictional storage location")
+            notes = st.text_input("Notes (optional)")
+            add = st.form_submit_button("Add Item")
+        if add:
+            if not iid.strip() or not name.strip():
+                st.error("Item ID and name are required.")
+            else:
+                conn = get_conn()
+                try:
+                    conn.execute(
+                        "INSERT INTO inventory VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            iid.strip(), name.strip(), cat, int(qty), unit, loc,
+                            now_iso(), notes.strip(),
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO activity_log "
+                        "(timestamp, entity_type, entity_id, action, details) "
+                        "VALUES (?,?,?,?,?)",
+                        (
+                            now_iso(), "inventory", iid.strip(), "Item added",
+                            f"Added {name} ({qty} {unit}).",
+                        ),
+                    )
+                    conn.commit()
+                    st.success(f"Item {iid} added.")
+                except sqlite3.IntegrityError:
+                    st.error("An item with that ID already exists.")
+                finally:
+                    conn.close()
+
+
+def requests_tab():
+    conn = get_conn()
+    reqs = conn.execute(
+        "SELECT * FROM relief_requests ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+
+    if not reqs:
+        st.info("No relief requests yet. Create one from the 'New Request' tab.")
+        return
+
+    st.caption(
+        "Approving a request does NOT mean resources were dispatched or delivered. "
+        "Marking a request as Fulfilled deducts stock only after explicit confirmation."
+    )
+
+    for r in reqs:
+        label = (
+            f"#{r['id']} · {r['item_id']} · requested {r['quantity_requested']} "
+            f"· {r['status']}"
+        )
+        with st.expander(label):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**Incident:** {r['incident_code'] or '—'}")
+                st.markdown(f"**Item:** {r['item_id']}")
+                st.markdown(f"**Requested:** {r['quantity_requested']}")
+                st.markdown(f"**Matchable:** {r['matched_qty']}")
+                st.markdown(f"**Shortfall:** {r['shortfall']}")
+                st.markdown(f"**Suggested location:** {r['storage_location'] or '—'}")
+            with c2:
+                st.markdown(f"**Status:** {r['status']}")
+                st.markdown(f"**Created:** {r['created_at']}")
+                st.markdown(f"**Reviewed:** {r['reviewed_at'] or '—'}")
+                st.markdown(f"**Notes:** {r['notes'] or '—'}")
+            st.markdown(f"**Explanation:** {r['explanation'] or '—'}")
+
+            if r["status"] in ("Pending Review", "Approved"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    if st.button("Approve", key=f"req_appr_{r['id']}"):
+                        conn = get_conn()
+                        conn.execute(
+                            "UPDATE relief_requests SET status='Approved', reviewed_at=? "
+                            "WHERE id=?",
+                            (now_iso(), r["id"]),
+                        )
+                        conn.commit()
+                        conn.close()
+                        log_activity(
+                            "relief_request", str(r["id"]), "Approved",
+                            f"Request for {r['quantity_requested']} × {r['item_id']} approved "
+                            f"(no stock deducted).",
+                        )
+                        st.success("Request approved (no stock deducted).")
+                with c2:
+                    if st.button("Reject", key=f"req_rej_{r['id']}"):
+                        conn = get_conn()
+                        conn.execute(
+                            "UPDATE relief_requests SET status='Rejected', reviewed_at=? "
+                            "WHERE id=?",
+                            (now_iso(), r["id"]),
+                        )
+                        conn.commit()
+                        conn.close()
+                        log_activity(
+                            "relief_request", str(r["id"]), "Rejected",
+                            f"Request for {r['quantity_requested']} × {r['item_id']} rejected.",
+                        )
+                        st.success("Request rejected.")
+                with c3:
+                    if st.button("Mark Fulfilled (deducts stock)", key=f"req_ful_{r['id']}"):
+                        ok, msg = fulfill_request(r["id"])
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+
+
+def new_request_tab():
+    st.markdown("##### Create a relief request")
+    st.caption(
+        "A match is a suggestion. Stock is NOT deducted until a reviewer "
+        "explicitly marks the request as Fulfilled."
+    )
+
+    conn = get_conn()
+    incidents = conn.execute(
+        "SELECT report_code, title FROM incidents ORDER BY created_at DESC"
+    ).fetchall()
+    items = conn.execute(
+        "SELECT item_id, item_name, unit, quantity FROM inventory ORDER BY item_id"
+    ).fetchall()
+    conn.close()
+
+    if not items:
+        st.warning("Add an inventory item before creating a request.")
+        return
+
+    incident_options = ["(none)"] + [f"{x['report_code']} — {x['title']}" for x in incidents]
+    item_options = [
+        f"{x['item_id']} — {x['item_name']} ({x['quantity']} {x['unit']})"
+        for x in items
+    ]
+
+    with st.form("new_relief_request"):
+        incident_sel = st.selectbox("Related incident (optional)", incident_options)
+        item_sel = st.selectbox("Requested item", item_options)
+        qty = st.number_input("Requested quantity", min_value=1, step=1, value=1)
+        notes = st.text_area("Request notes (optional)", height=80)
+        submitted = st.form_submit_button("Create Request & Match")
+
+    if not submitted:
+        return
+
+    if qty <= 0:
+        st.error("Requested quantity must be positive.")
+        return
+
+    item_id = item_sel.split(" — ")[0].strip()
+    incident_code = (
+        "" if incident_sel == "(none)" else incident_sel.split(" — ")[0].strip()
+    )
+
+    match = compute_match(item_id, int(qty))
+    if match is None:
+        st.error("Item not found in inventory.")
+        return
+
+    explanation = (
+        f"Requested {qty} {match['unit']} of {match['item_name']}. "
+        f"Available at {match['location'] or 'unspecified location'}: "
+        f"{match['available']} {match['unit']}. "
+        f"Potentially matchable: {match['matchable']} {match['unit']}. "
+        f"Shortfall: {match['shortfall']} {match['unit']}. "
+        f"Stock is NOT deducted until a reviewer marks this request as Fulfilled."
+    )
+
+    conn = get_conn()
+    cur = conn.execute(
+        """INSERT INTO relief_requests
+           (incident_code, item_id, quantity_requested, notes, status,
+            matched_qty, shortfall, storage_location, explanation,
+            created_at, reviewed_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            incident_code, item_id, int(qty), notes.strip(), "Pending Review",
+            match["matchable"], match["shortfall"], match["location"],
+            explanation, now_iso(), None,
+        ),
+    )
+    req_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    log_activity(
+        "relief_request", str(req_id), "Request created",
+        f"Requested {qty} {match['unit']} of {item_id}. Matchable: "
+        f"{match['matchable']}. Shortfall: {match['shortfall']}.",
+    )
+
+    st.success(f"Request #{req_id} created.")
+    st.markdown("**Match calculation:**")
+    st.markdown(
+        f"- Requested: **{qty} {match['unit']}**\n"
+        f"- Available: **{match['available']} {match['unit']}**\n"
+        f"- Potentially matchable: **{match['matchable']} {match['unit']}**\n"
+        f"- Shortfall: **{match['shortfall']} {match['unit']}**\n"
+        f"- Suggested storage location: **{match['location'] or '—'}**\n"
+        f"- {explanation}"
+    )
+
+
+def page_activity_log():
+    st.subheader("Activity & Audit Log")
+    st.caption("Append-only log of important actions in this local prototype.")
+    conn = get_conn()
+    logs = conn.execute("SELECT * FROM activity_log ORDER BY id DESC").fetchall()
+    conn.close()
+
+    if not logs:
+        st.info("No activity yet.")
+        return
+
+    df = pd.DataFrame(
+        [
+            {
+                "Time": x["timestamp"],
+                "Entity": x["entity_type"],
+                "ID": x["entity_id"],
+                "Action": x["action"],
+                "Details": x["details"],
+            }
+            for x in logs
+        ]
+    )
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def page_about():
+    st.subheader("About & Safety")
+    st.markdown(
+        """
+        **RAHAT GRID AI** is a *local demonstration prototype* for explainable
+        disaster triage and resource coordination. It is not a live emergency service.
+
+        - All preloaded incidents, people, locations, inventory quantities and metrics
+          are **FICTIONAL DEMO DATA**.
+        - Triage is **deterministic rule-based logic**, not a trained AI model.
+        - Duplicate flags are **candidates for human review**, not proof of duplication.
+        - Resource matches do **not** mean resources were dispatched or delivered.
+          Inventory is deducted only when a reviewer explicitly marks a request as
+          **Fulfilled**.
+        - There is **no** live government, emergency-service, GPS, SMS or helpline
+          integration. No external API is called.
+        - Human responders retain full responsibility for real emergency decisions.
+        - This application is **not a substitute** for official emergency services or
+          field assessment.
+        """
+    )
+
+    st.markdown("---")
+    st.markdown("### How triage scoring works")
+    st.markdown(
+        """
+        Each report is scored against fixed, transparent rules:
+
+        | Indicator                                    | Score |
+        |----------------------------------------------|-------|
+        | People reported trapped                      | +50   |
+        | Rapidly rising floodwater                    | +25   |
+        | Reported serious injury / medical danger     | +30   |
+        | Other urgent circumstance                    | +15   |
+        | Multiple danger indicators (≥ 2)             | +10   |
+
+        Priority thresholds:
+
+        - **Urgent Review** at score ≥ 60
+        - **High** at ≥ 35
+        - **Moderate** at ≥ 15
+        - **Routine Review** below 15
+
+        Affected-person count alone is **never** used to determine rescue order.
+        A low score does **not** mean a person is safe.
+        """
+    )
+
+    st.markdown("---")
+    st.markdown("### Reset demo data")
+    st.warning(
+        "This will **delete all incidents, inventory items, relief requests, "
+        "duplicate reviews, and activity log entries**, then reload the fictional "
+        "demo dataset. Do not use on a database containing data you wish to keep."
+    )
+    confirm = st.checkbox("I understand that this will reset the local demo database.")
+    if st.button("Reset Demo Data", disabled=not confirm):
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM incidents")
+        c.execute("DELETE FROM inventory")
+        c.execute("DELETE FROM relief_requests")
+        c.execute("DELETE FROM duplicate_reviews")
+        c.execute("DELETE FROM activity_log")
+        conn.commit()
+        conn.close()
+        conn2 = get_conn()
+        seed_demo_data(conn2)
+        conn2.close()
+        st.success("Demo data reset. Fresh fictional records have been seeded.")
+
+
+# ---------------------------------------------------------------------------
+# Sidebar & main
+# ---------------------------------------------------------------------------
+def sidebar() -> str:
+    st.sidebar.markdown(
+        """
+        <div style='padding: 20px 16px 10px 16px;'>
+            <div style='font-size:22px; font-weight:800; letter-spacing:1px;
+                        color:#ffffff;'>RAHAT GRID AI</div>
+            <div style='font-size:11px; color:#9fb3c8; margin-top:4px;
+                        line-height:1.4;'>
+                Explainable Disaster Triage &amp;<br/>Resource Coordination
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown(
+        """
+        <div style='background:rgba(220,38,38,0.22); color:#fecaca;
+                    border:1px solid rgba(248,113,113,0.4);
+                    padding:8px 10px; border-radius:6px; font-size:10px;
+                    margin:0 12px 16px 12px; letter-spacing:0.5px;
+                    line-height:1.4;'>
+            SIMULATION MODE<br/>FICTIONAL DATA<br/>NOT A LIVE EMERGENCY SERVICE
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown("---")
+    page = st.sidebar.radio(
+        "Navigation",
+        [
+            "Operations Overview",
+            "Incident Reports",
+            "Triage Review",
+            "Resource Inventory",
+            "Activity & Audit Log",
+            "About & Safety",
+        ],
+        label_visibility="collapsed",
+    )
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Prototype · Local · No network calls")
+    return page
+
+
+def main():
+    inject_css()
+    init_db()
+    page = sidebar()
+    render_header()
+    if page == "Operations Overview":
+        page_overview()
+    elif page == "Incident Reports":
+        page_incident_reports()
+    elif page == "Triage Review":
+        page_triage_review()
+    elif page == "Resource Inventory":
+        page_resource_inventory()
+    elif page == "Activity & Audit Log":
+        page_activity_log()
+    elif page == "About & Safety":
+        page_about()
+
+
+if __name__ == "__main__":
+    main()

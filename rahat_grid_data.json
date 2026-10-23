@@ -1,0 +1,79 @@
+{
+  "inventory": {
+    "water": 180,
+    "food": 90,
+    "first_aid": 12
+  },
+  "reports": [
+    {
+      "id": "RG-1042",
+      "created_at": "2026-10-23 08:10",
+      "reporter": "Demo caller A",
+      "zone": "North Canal",
+      "description": "Two adults and one child trapped on the roof as water rises fast.",
+      "people": 3,
+      "needs": {
+        "water": 12,
+        "food": 3,
+        "first_aid": 1
+      },
+      "status": "New"
+    },
+    {
+      "id": "RG-1043",
+      "created_at": "2026-10-23 08:24",
+      "reporter": "Demo caller B",
+      "zone": "North Canal",
+      "description": "Family of three on a roof, flood water is rising fast near the canal.",
+      "people": 3,
+      "needs": {
+        "water": 12,
+        "food": 3,
+        "first_aid": 0
+      },
+      "status": "New"
+    },
+    {
+      "id": "RG-1044",
+      "created_at": "2026-10-23 09:02",
+      "reporter": "Demo caller C",
+      "zone": "Market Road",
+      "description": "Flood water entered a ground-floor clinic. Several people need first aid.",
+      "people": 11,
+      "needs": {
+        "water": 30,
+        "food": 12,
+        "first_aid": 4
+      },
+      "status": "Under review"
+    },
+    {
+      "id": "RG-1045",
+      "created_at": "2026-10-23 09:35",
+      "reporter": "Demo caller D",
+      "zone": "East School",
+      "description": "Residents at the school shelter need drinking water and meal packs.",
+      "people": 8,
+      "needs": {
+        "water": 24,
+        "food": 16,
+        "first_aid": 0
+      },
+      "status": "New"
+    },
+    {
+      "id": "RG-1046",
+      "created_at": "2026-10-23 10:05",
+      "reporter": "Demo caller E",
+      "zone": "South Bridge",
+      "description": "Flood water is blocking the road; no injuries reported. Requesting food.",
+      "people": 2,
+      "needs": {
+        "water": 0,
+        "food": 5,
+        "first_aid": 0
+      },
+      "status": "New"
+    }
+  ]
+}
